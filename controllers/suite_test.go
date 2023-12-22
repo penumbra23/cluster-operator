@@ -13,14 +13,15 @@ package controllers_test
 import (
 	"context"
 	"path/filepath"
+	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"testing"
 
 	"k8s.io/client-go/util/retry"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	rabbitmqv1beta1 "github.com/rabbitmq/cluster-operator/api/v1beta1"
-	"github.com/rabbitmq/cluster-operator/controllers"
+	rabbitmqv1beta1 "github.com/rabbitmq/cluster-operator/v2/api/v1beta1"
+	"github.com/rabbitmq/cluster-operator/v2/controllers"
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -84,8 +85,10 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
-		Scheme:             scheme.Scheme,
-		MetricsBindAddress: "0",
+		Scheme: scheme.Scheme,
+		Metrics: server.Options{
+			BindAddress: "0",
+		},
 	})
 	Expect(err).ToNot(HaveOccurred())
 
@@ -98,6 +101,7 @@ var _ = BeforeSuite(func() {
 		Clientset:               clientSet,
 		PodExecutor:             fakeExecutor,
 		DefaultRabbitmqImage:    defaultRabbitmqImage,
+		ControlRabbitmqImage:    false,
 		DefaultUserUpdaterImage: defaultUserUpdaterImage,
 		DefaultImagePullSecrets: defaultImagePullSecrets,
 	}).SetupWithManager(mgr)

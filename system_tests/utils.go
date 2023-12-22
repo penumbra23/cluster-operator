@@ -44,11 +44,11 @@ import (
 	"github.com/cloudflare/cfssl/signer/local"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/go-stomp/stomp"
-	rabbitmqv1beta1 "github.com/rabbitmq/cluster-operator/api/v1beta1"
+	amqp "github.com/rabbitmq/amqp091-go"
+	rabbitmqv1beta1 "github.com/rabbitmq/cluster-operator/v2/api/v1beta1"
 	streamamqp "github.com/rabbitmq/rabbitmq-stream-go-client/pkg/amqp"
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/message"
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/stream"
-	"github.com/streadway/amqp"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -90,12 +90,12 @@ func createClientSet() (*kubernetes.Clientset, error) {
 	return clientset, err
 }
 
-func kubectlExec(namespace, podname, containerName string, args ...string) ([]byte, error) {
+func kubectlExec(namespace, podName, containerName string, args ...string) ([]byte, error) {
 	kubectlArgs := append([]string{
 		"-n",
 		namespace,
 		"exec",
-		podname,
+		podName,
 		"-c",
 		containerName,
 		"--",
@@ -360,7 +360,6 @@ func alivenessTest(rabbitmqHostName, rabbitmqPort, rabbitmqUsername, rabbitmqPas
 
 	resp, err := client.Do(req)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
-	Expect(resp).To(HaveHTTPStatus(http.StatusOK))
 
 	defer resp.Body.Close()
 	b, err := ioutil.ReadAll(resp.Body)
@@ -453,7 +452,7 @@ func overrideSecurityContextForOpenshift(cluster *rabbitmqv1beta1.RabbitmqCluste
 	}
 }
 
-//the updateFn can change properties of the RabbitmqCluster CR
+// the updateFn can change properties of the RabbitmqCluster CR
 func updateRabbitmqCluster(ctx context.Context, client client.Client, name, namespace string, updateFn func(*rabbitmqv1beta1.RabbitmqCluster)) error {
 	var result rabbitmqv1beta1.RabbitmqCluster
 

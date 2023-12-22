@@ -13,6 +13,7 @@ package controllers_test
 import (
 	"context"
 	"fmt"
+	"k8s.io/utils/ptr"
 	"time"
 
 	"k8s.io/utils/pointer"
@@ -23,8 +24,8 @@ import (
 
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/gstruct"
-	rabbitmqv1beta1 "github.com/rabbitmq/cluster-operator/api/v1beta1"
-	"github.com/rabbitmq/cluster-operator/internal/status"
+	rabbitmqv1beta1 "github.com/rabbitmq/cluster-operator/v2/api/v1beta1"
+	"github.com/rabbitmq/cluster-operator/v2/internal/status"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -338,6 +339,23 @@ var _ = Describe("RabbitmqClusterController", func() {
 			clientSvc := service(ctx, cluster, "")
 			Expect(clientSvc.Spec.Type).Should(Equal(corev1.ServiceTypeLoadBalancer))
 			Expect(clientSvc.Annotations).Should(HaveKeyWithValue("annotations", "cr-annotation"))
+		})
+
+		It("creates the service with the expected IP family policy", func() {
+			cluster = &rabbitmqv1beta1.RabbitmqCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: "rabbit-with-ip-family", Namespace: defaultNamespace},
+			}
+			cluster.Spec.Service.IPFamilyPolicy = ptr.To(corev1.IPFamilyPolicyPreferDualStack)
+
+			Expect(client.Create(ctx, cluster)).To(Succeed())
+
+			clientSvc := service(ctx, cluster, "")
+			Expect(clientSvc.Spec.IPFamilyPolicy).ToNot(BeNil())
+			Expect(clientSvc.Spec.IPFamilyPolicy).To(BeEquivalentTo(ptr.To("PreferDualStack")))
+
+			headlessSvc := service(ctx, cluster, "nodes")
+			Expect(headlessSvc.Spec.IPFamilyPolicy).ToNot(BeNil())
+			Expect(headlessSvc.Spec.IPFamilyPolicy).To(BeEquivalentTo(ptr.To("PreferDualStack")))
 		})
 	})
 
@@ -726,7 +744,7 @@ var _ = Describe("RabbitmqClusterController", func() {
 					Namespace: defaultNamespace,
 				},
 			}
-			cluster.Spec.Replicas = pointer.Int32Ptr(1)
+			cluster.Spec.Replicas = pointer.Int32(1)
 		})
 
 		It("exposes ReconcileSuccess condition", func() {
@@ -770,7 +788,7 @@ var _ = Describe("RabbitmqClusterController", func() {
 					Namespace: defaultNamespace,
 				},
 				Spec: rabbitmqv1beta1.RabbitmqClusterSpec{
-					Replicas: pointer.Int32Ptr(10),
+					Replicas: pointer.Int32(10),
 					Override: rabbitmqv1beta1.RabbitmqClusterOverrideSpec{
 						StatefulSet: &rabbitmqv1beta1.StatefulSet{
 							Spec: &rabbitmqv1beta1.StatefulSetSpec{
@@ -1012,7 +1030,7 @@ var _ = Describe("RabbitmqClusterController", func() {
 
 		It("updates", func() {
 			Expect(updateWithRetry(cluster, func(r *rabbitmqv1beta1.RabbitmqCluster) {
-				cluster.Spec.Override.StatefulSet.Spec.Replicas = pointer.Int32Ptr(15)
+				cluster.Spec.Override.StatefulSet.Spec.Replicas = pointer.Int32(15)
 				cluster.Spec.Override.StatefulSet.Spec.Template.Spec.Containers = []corev1.Container{
 					{
 						Name:  "additional-container-2",

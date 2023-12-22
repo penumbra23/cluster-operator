@@ -16,6 +16,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 
 	corev1 "k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	k8sresource "k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -29,7 +30,7 @@ import (
 // RabbitmqCluster is the Schema for the RabbitmqCluster API. Each instance of this object
 // corresponds to a single RabbitMQ cluster.
 type RabbitmqCluster struct {
-	// Embedded metadata identifying a Kind and API Verison of an object.
+	// Embedded metadata identifying a Kind and API Version of an object.
 	// For more info, see: https://pkg.go.dev/k8s.io/apimachinery/pkg/apis/meta/v1#TypeMeta
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -84,6 +85,16 @@ type RabbitmqClusterSpec struct {
 	// +kubebuilder:validation:Minimum:=0
 	// +kubebuilder:default:=604800
 	TerminationGracePeriodSeconds *int64 `json:"terminationGracePeriodSeconds,omitempty"`
+	// DelayStartSeconds is the time the init container (`setup-container`) will sleep before terminating.
+	// This effectively delays the time between starting the Pod and starting the `rabbitmq` container.
+	// RabbitMQ relies on up-to-date DNS entries early during peer discovery.
+	// The purpose of this artificial delay is to ensure that DNS entries are up-to-date when booting RabbitMQ.
+	// For more information, see https://github.com/kubernetes/kubernetes/issues/92559
+	// If your Kubernetes DNS backend is configured with a low DNS cache value or publishes not ready addresses
+	// promptly, you can decrase this value or set it to 0.
+	// +kubebuilder:validation:Minimum:=0
+	// +kubebuilder:default:=30
+	DelayStartSeconds *int32 `json:"delayStartSeconds,omitempty"`
 	// Secret backend configuration for the RabbitmqCluster.
 	// Enables to fetch default user credentials and certificates from K8s external secret stores.
 	SecretBackend SecretBackend `json:"secretBackend,omitempty"`
@@ -94,7 +105,8 @@ type RabbitmqClusterSpec struct {
 // Future secret backends could be Secrets Store CSI Driver.
 // If not configured, K8s Secrets will be used.
 type SecretBackend struct {
-	Vault *VaultSpec `json:"vault,omitempty"`
+	Vault          *VaultSpec              `json:"vault,omitempty"`
+	ExternalSecret v1.LocalObjectReference `json:"externalSecret,omitempty"`
 }
 
 // VaultSpec will add Vault annotations (see https://www.vaultproject.io/docs/platform/k8s/injector/annotations)
@@ -233,6 +245,18 @@ type StatefulSetSpec struct {
 	// Template.
 	// +optional
 	UpdateStrategy *appsv1.StatefulSetUpdateStrategy `json:"updateStrategy,omitempty" protobuf:"bytes,7,opt,name=updateStrategy"`
+
+	// The minimum number of seconds for which a newly created StatefulSet pod should
+	// be ready without any of its container crashing, for it to be considered
+	// available. Defaults to 0 (pod will be considered available as soon as it
+	// is ready).
+	// +optional
+	MinReadySeconds int32 `json:"minReadySeconds,omitempty" protobuf:"varint,4,opt,name=minReadySeconds"`
+
+	// StatefulSetPersistentVolumeClaimRetentionPolicy describes the policy used for PVCs
+	// created from the StatefulSet VolumeClaimTemplates.
+	// +optional
+	PersistentVolumeClaimRetentionPolicy *appsv1.StatefulSetPersistentVolumeClaimRetentionPolicy `json:"persistentVolumeClaimRetentionPolicy,omitempty" protobuf:"bytes,10,opt,name=persistentVolumeClaimRetentionPolicy"`
 }
 
 // EmbeddedLabelsAnnotations is an embedded subset of the fields included in k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta.
@@ -307,7 +331,7 @@ type PodTemplateSpec struct {
 // It contains TypeMeta and a reduced ObjectMeta.
 // Field status is omitted.
 type PersistentVolumeClaim struct {
-	// Embedded metadata identifying a Kind and API Verison of an object.
+	// Embedded metadata identifying a Kind and API Version of an object.
 	// For more info, see: https://pkg.go.dev/k8s.io/apimachinery/pkg/apis/meta/v1#TypeMeta
 	metav1.TypeMeta `json:",inline"`
 	// +optional
@@ -361,6 +385,10 @@ type RabbitmqClusterConfigurationSpec struct {
 	// For more information on env config, see https://www.rabbitmq.com/man/rabbitmq-env.conf.5.html
 	// +kubebuilder:validation:MaxLength:=100000
 	EnvConfig string `json:"envConfig,omitempty"`
+	// Erlang Inet configuration to apply to the Erlang VM running rabbit.
+	// See also: https://www.erlang.org/doc/apps/erts/inet_cfg.html
+	// +kubebuilder:validation:MaxLength:=2000
+	ErlangInetConfig string `json:"erlangInetConfig,omitempty"`
 }
 
 // The settings for the persistent storage desired for each Pod in the RabbitmqCluster.
@@ -383,6 +411,10 @@ type RabbitmqClusterServiceSpec struct {
 	Type corev1.ServiceType `json:"type,omitempty"`
 	// Annotations to add to the Service.
 	Annotations map[string]string `json:"annotations,omitempty"`
+	// IPFamilyPolicy represents the dual-stack-ness requested or required by a Service
+	// See also: https://pkg.go.dev/k8s.io/api/core/v1#IPFamilyPolicy
+	// +kubebuilder:validation:Enum=SingleStack;PreferDualStack;RequireDualStack
+	IPFamilyPolicy *corev1.IPFamilyPolicy `json:"ipFamilyPolicy,omitempty"`
 }
 
 func (cluster *RabbitmqCluster) TLSEnabled() bool {
@@ -417,17 +449,23 @@ func (cluster *RabbitmqCluster) AdditionalPluginEnabled(plugin Plugin) bool {
 	return false
 }
 
-// the OSR plugin `rabbitmq_multi_dc_replication` enables `rabbitmq_stream` as a dependency
+// StreamNeeded returns true when stream or plugins that auto enable stream are turned on
 func (cluster *RabbitmqCluster) StreamNeeded() bool {
-	return cluster.AdditionalPluginEnabled("rabbitmq_stream") || cluster.AdditionalPluginEnabled("rabbitmq_multi_dc_replication")
+	return cluster.AdditionalPluginEnabled("rabbitmq_stream") ||
+		cluster.AdditionalPluginEnabled("rabbitmq_stream_management") ||
+		cluster.AdditionalPluginEnabled("rabbitmq_multi_dc_replication")
 }
 
 func (cluster *RabbitmqCluster) VaultEnabled() bool {
 	return cluster.Spec.SecretBackend.Vault != nil
 }
 
-func (cluster *RabbitmqCluster) UsesDefaultUserUpdaterImage() bool {
-	return cluster.VaultEnabled() && cluster.Spec.SecretBackend.Vault.DefaultUserUpdaterImage == nil
+func (cluster *RabbitmqCluster) ExternalSecretEnabled() bool {
+	return cluster.Spec.SecretBackend.ExternalSecret.Name != ""
+}
+
+func (cluster *RabbitmqCluster) UsesDefaultUserUpdaterImage(controlRabbitmqImage bool) bool {
+	return cluster.VaultEnabled() && (cluster.Spec.SecretBackend.Vault.DefaultUserUpdaterImage == nil || controlRabbitmqImage)
 }
 
 func (cluster *RabbitmqCluster) VaultDefaultUserSecretEnabled() bool {
@@ -446,7 +484,7 @@ func (cluster *RabbitmqCluster) ServiceSubDomain() string {
 
 // RabbitmqClusterList contains a list of RabbitmqClusters.
 type RabbitmqClusterList struct {
-	// Embedded metadata identifying a Kind and API Verison of an object.
+	// Embedded metadata identifying a Kind and API Version of an object.
 	// For more info, see: https://pkg.go.dev/k8s.io/apimachinery/pkg/apis/meta/v1#TypeMeta
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`

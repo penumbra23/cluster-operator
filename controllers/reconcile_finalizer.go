@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	rabbitmqv1beta1 "github.com/rabbitmq/cluster-operator/api/v1beta1"
-	"github.com/rabbitmq/cluster-operator/internal/resource"
+	rabbitmqv1beta1 "github.com/rabbitmq/cluster-operator/v2/api/v1beta1"
+	"github.com/rabbitmq/cluster-operator/v2/internal/resource"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -31,11 +31,7 @@ func (r *RabbitmqClusterReconciler) addFinalizerIfNeeded(ctx context.Context, ra
 
 func (r *RabbitmqClusterReconciler) removeFinalizer(ctx context.Context, rabbitmqCluster *rabbitmqv1beta1.RabbitmqCluster) error {
 	controllerutil.RemoveFinalizer(rabbitmqCluster, deletionFinalizer)
-	if err := r.Client.Update(ctx, rabbitmqCluster); err != nil {
-		return err
-	}
-
-	return nil
+	return r.Client.Update(ctx, rabbitmqCluster)
 }
 
 func (r *RabbitmqClusterReconciler) prepareForDeletion(ctx context.Context, rabbitmqCluster *rabbitmqv1beta1.RabbitmqCluster) error {

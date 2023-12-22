@@ -11,7 +11,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	rabbitmqv1beta1 "github.com/rabbitmq/cluster-operator/api/v1beta1"
+	rabbitmqv1beta1 "github.com/rabbitmq/cluster-operator/v2/api/v1beta1"
 )
 
 var _ = Describe("Reconcile CLI", func() {
@@ -60,7 +60,7 @@ var _ = Describe("Reconcile CLI", func() {
 					return sts.ObjectMeta.Annotations
 				}, 5).ShouldNot(HaveKey("rabbitmq.com/createdAt"))
 				Expect(fakeExecutor.ExecutedCommands()).To(ContainElement(command{"bash", "-c",
-					"set -eo pipefail; rabbitmqctl -s list_feature_flags name state stability | (grep 'disabled\\sstable$' || true) | cut -f 1 | xargs -r -n1 rabbitmqctl enable_feature_flag"}))
+					"rabbitmqctl enable_feature_flag all"}))
 			})
 		})
 	})
@@ -73,7 +73,7 @@ var _ = Describe("Reconcile CLI", func() {
 					Namespace: defaultNamespace,
 				},
 				Spec: rabbitmqv1beta1.RabbitmqClusterSpec{
-					Replicas: pointer.Int32Ptr(3),
+					Replicas: pointer.Int32(3),
 				},
 			}
 			Expect(client.Create(ctx, cluster)).To(Succeed())
@@ -147,7 +147,7 @@ var _ = Describe("Reconcile CLI", func() {
 					Namespace: defaultNamespace,
 				},
 				Spec: rabbitmqv1beta1.RabbitmqClusterSpec{
-					Replicas:            pointer.Int32Ptr(3),
+					Replicas:            pointer.Int32(3),
 					SkipPostDeploySteps: true,
 				},
 			}
@@ -205,7 +205,7 @@ var _ = Describe("Reconcile CLI", func() {
 					Namespace: defaultNamespace,
 				},
 				Spec: rabbitmqv1beta1.RabbitmqClusterSpec{
-					Replicas:            pointer.Int32Ptr(1),
+					Replicas:            pointer.Int32(1),
 					SkipPostDeploySteps: false,
 				},
 			}

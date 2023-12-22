@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	rabbitmqv1beta1 "github.com/rabbitmq/cluster-operator/api/v1beta1"
-	"github.com/rabbitmq/cluster-operator/internal/resource"
+	rabbitmqv1beta1 "github.com/rabbitmq/cluster-operator/v2/api/v1beta1"
+	"github.com/rabbitmq/cluster-operator/v2/internal/resource"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -38,7 +38,7 @@ func (r *RabbitmqClusterReconciler) runRabbitmqCLICommandsIfAnnotated(ctx contex
 		// plugins configMap was updated very recently
 		// give StatefulSet controller some time to trigger restart of StatefulSet if necessary
 		// otherwise, there would be race conditions where we exec into containers losing the connection due to pods being terminated
-		logger.Info("requeuing request to set plugins")
+		logger.V(1).Info("requeuing request to set plugins")
 		return 2 * time.Second, nil
 	}
 
@@ -68,7 +68,7 @@ func (r *RabbitmqClusterReconciler) runRabbitmqCLICommandsIfAnnotated(ctx contex
 func (r *RabbitmqClusterReconciler) runEnableFeatureFlagsCommand(ctx context.Context, rmq *rabbitmqv1beta1.RabbitmqCluster, sts *appsv1.StatefulSet) error {
 	logger := ctrl.LoggerFrom(ctx)
 	podName := fmt.Sprintf("%s-0", rmq.ChildResourceName("server"))
-	cmd := "set -eo pipefail; rabbitmqctl -s list_feature_flags name state stability | (grep 'disabled\\sstable$' || true) | cut -f 1 | xargs -r -n1 rabbitmqctl enable_feature_flag"
+	cmd := "rabbitmqctl enable_feature_flag all"
 	stdout, stderr, err := r.exec(rmq.Namespace, podName, "rabbitmq", "bash", "-c", cmd)
 	if err != nil {
 		msg := "failed to enable all feature flags on pod"
@@ -113,6 +113,7 @@ func (r *RabbitmqClusterReconciler) runQueueRebalanceCommand(ctx context.Context
 		r.Recorder.Event(rmq, corev1.EventTypeWarning, "FailedReconcile", fmt.Sprintf("%s %s", msg, podName))
 		return fmt.Errorf("%s %s: %w", msg, podName, err)
 	}
+	logger.Info("successfully rebalanced queues")
 	return r.deleteAnnotation(ctx, rmq, queueRebalanceAnnotation)
 }
 

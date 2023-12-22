@@ -6,8 +6,8 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	rabbitmqv1beta1 "github.com/rabbitmq/cluster-operator/api/v1beta1"
-	"github.com/rabbitmq/cluster-operator/internal/status"
+	rabbitmqv1beta1 "github.com/rabbitmq/cluster-operator/v2/api/v1beta1"
+	"github.com/rabbitmq/cluster-operator/v2/internal/status"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	k8sresource "k8s.io/apimachinery/pkg/api/resource"
@@ -31,7 +31,7 @@ var _ = Describe("Persistence", func() {
 				Namespace: defaultNamespace,
 			},
 			Spec: rabbitmqv1beta1.RabbitmqClusterSpec{
-				Replicas: pointer.Int32Ptr(5),
+				Replicas: pointer.Int32(5),
 			},
 		}
 		Expect(client.Create(ctx, cluster)).To(Succeed())

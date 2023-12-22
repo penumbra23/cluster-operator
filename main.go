@@ -11,16 +11,20 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/rabbitmq/cluster-operator/pkg/profiling"
 	"os"
+	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/rabbitmq/cluster-operator/v2/pkg/profiling"
+
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
-	rabbitmqv1beta1 "github.com/rabbitmq/cluster-operator/api/v1beta1"
-	"github.com/rabbitmq/cluster-operator/controllers"
+	rabbitmqv1beta1 "github.com/rabbitmq/cluster-operator/v2/api/v1beta1"
+	"github.com/rabbitmq/cluster-operator/v2/controllers"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	defaultscheme "k8s.io/client-go/kubernetes/scheme"
@@ -46,7 +50,8 @@ func init() {
 func main() {
 	var (
 		metricsAddr             string
-		defaultRabbitmqImage    = "rabbitmq:3.10.2-management"
+		defaultRabbitmqImage    = "rabbitmq:3.12.2-management"
+		controlRabbitmqImage    = false
 		defaultUserUpdaterImage = "rabbitmqoperator/default-user-credential-updater:1.0.2"
 		defaultImagePullSecrets = ""
 	)
@@ -80,17 +85,49 @@ func main() {
 		defaultUserUpdaterImage = configuredDefaultUserUpdaterImage
 	}
 
+	// EXPERIMENTAL: If the environment variable CONTROL_RABBITMQ_IMAGE is set to `true`, the operator will
+	// automatically set the default image tags. (DEFAULT_RABBITMQ_IMAGE and DEFAULT_USER_UPDATER_IMAGE)
+	// No safety checks!
+	if configuredControlRabbitmqImage, ok := os.LookupEnv("CONTROL_RABBITMQ_IMAGE"); ok {
+		var err error
+		if controlRabbitmqImage, err = strconv.ParseBool(configuredControlRabbitmqImage); err != nil {
+			log.Error(err, "unable to start manager")
+			os.Exit(1)
+		}
+	}
+
 	if configuredDefaultImagePullSecrets, ok := os.LookupEnv("DEFAULT_IMAGE_PULL_SECRETS"); ok {
 		defaultImagePullSecrets = configuredDefaultImagePullSecrets
 	}
 
 	options := ctrl.Options{
-		Scheme:                  scheme,
-		MetricsBindAddress:      metricsAddr,
+		Scheme: scheme,
+		Metrics: server.Options{
+			BindAddress: metricsAddr,
+		},
 		LeaderElection:          true,
 		LeaderElectionNamespace: operatorNamespace,
 		LeaderElectionID:        "rabbitmq-cluster-operator-leader-election",
-		Namespace:               operatorScopeNamespace,
+		// Namespace is deprecated. Advice is to use Cache.Namespaces instead
+	}
+
+	if operatorScopeNamespace != "" {
+		if strings.Contains(operatorScopeNamespace, ",") {
+			namespaces := strings.Split(operatorScopeNamespace, ",")
+			// https://github.com/kubernetes-sigs/controller-runtime/blob/main/designs/cache_options.md#only-cache-namespaced-objects-in-the-foo-and-bar-namespace
+			// Sometimes I wish that controller-runtime graduated to 1.x
+			// This changed in 0.15, and again in 0.16 🤦
+			options.Cache.DefaultNamespaces = make(map[string]cache.Config)
+			for _, namespace := range namespaces {
+				options.Cache.DefaultNamespaces[namespace] = cache.Config{}
+			}
+			log.Info("limiting watch to specific namespaces for RabbitMQ resources", "namespaces", namespaces)
+		} else {
+			options.Cache = cache.Options{
+				DefaultNamespaces: map[string]cache.Config{operatorScopeNamespace: {}},
+			}
+			log.Info("limiting watch to one namespace", "namespace", operatorScopeNamespace)
+		}
 	}
 
 	if leaseDuration := getEnvInDuration("LEASE_DURATION"); leaseDuration != 0 {
@@ -108,21 +145,22 @@ func main() {
 		options.RetryPeriod = &retryPeriod
 	}
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), options)
-	if err != nil {
-		log.Error(err, "unable to start manager")
-		os.Exit(1)
-	}
-
 	if enableDebugPprof, ok := os.LookupEnv("ENABLE_DEBUG_PPROF"); ok {
 		pprofEnabled, err := strconv.ParseBool(enableDebugPprof)
 		if err == nil && pprofEnabled {
-			mgr, err = profiling.AddDebugPprofEndpoints(mgr)
+			o, err := profiling.AddDebugPprofEndpoints(&options)
 			if err != nil {
 				log.Error(err, "unable to add debug endpoints to manager")
 				os.Exit(1)
 			}
+			options = *o
 		}
+	}
+
+	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), options)
+	if err != nil {
+		log.Error(err, "unable to start manager")
+		os.Exit(1)
 	}
 
 	clusterConfig := config.GetConfigOrDie()
@@ -138,6 +176,7 @@ func main() {
 		DefaultRabbitmqImage:    defaultRabbitmqImage,
 		DefaultUserUpdaterImage: defaultUserUpdaterImage,
 		DefaultImagePullSecrets: defaultImagePullSecrets,
+		ControlRabbitmqImage:    controlRabbitmqImage,
 	}).SetupWithManager(mgr)
 	if err != nil {
 		log.Error(err, "unable to create controller", controllerName)

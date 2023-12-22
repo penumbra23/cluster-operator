@@ -13,14 +13,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	rabbitmqv1beta1 "github.com/rabbitmq/cluster-operator/api/v1beta1"
-	"github.com/rabbitmq/cluster-operator/internal/metadata"
+	rabbitmqv1beta1 "github.com/rabbitmq/cluster-operator/v2/api/v1beta1"
+	"github.com/rabbitmq/cluster-operator/v2/internal/metadata"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	k8sresource "k8s.io/apimachinery/pkg/api/resource"
@@ -82,6 +83,7 @@ func (builder *StatefulSetBuilder) Build() (client.Object, error) {
 		if overrideSts.Spec.ServiceName != "" {
 			sts.Spec.ServiceName = overrideSts.Spec.ServiceName
 		}
+
 	}
 
 	return sts, nil
@@ -101,7 +103,7 @@ func (builder *StatefulSetBuilder) Update(object client.Object) error {
 	//Update Strategy
 	sts.Spec.UpdateStrategy = appsv1.StatefulSetUpdateStrategy{
 		RollingUpdate: &appsv1.RollingUpdateStatefulSetStrategy{
-			Partition: pointer.Int32Ptr(0),
+			Partition: pointer.Int32(0),
 		},
 		Type: appsv1.RollingUpdateStatefulSetStrategyType,
 	}
@@ -161,6 +163,10 @@ func applyStsOverride(instance *rabbitmqv1beta1.RabbitmqCluster, scheme *runtime
 		sts.Spec.PodManagementPolicy = stsOverride.Spec.PodManagementPolicy
 	}
 
+	if stsOverride.Spec.MinReadySeconds != 0 {
+		sts.Spec.MinReadySeconds = stsOverride.Spec.MinReadySeconds
+	}
+
 	if len(stsOverride.Spec.VolumeClaimTemplates) != 0 {
 		// If spec.persistence.storage == 0, ignore PVC overrides.
 		// Main reason for that is that there is no default PVC in such case (emptyDir is used instead)
@@ -168,7 +174,7 @@ func applyStsOverride(instance *rabbitmqv1beta1.RabbitmqCluster, scheme *runtime
 		// where storage is set to 0 and yet there are PVCs with data
 		if instance.Spec.Persistence.Storage.Cmp(k8sresource.MustParse("0Gi")) == 0 {
 			logger := ctrl.Log.WithName("statefulset").WithName("RabbitmqCluster")
-			logger.Info(fmt.Sprintf("Warning: persistentVolumeClaim overrides are ignored for cluster \"%s\", becasue spec.persistence.storage is set to zero.", sts.GetName()))
+			logger.Info(fmt.Sprintf("Warning: persistentVolumeClaim overrides are ignored for cluster \"%s\", because spec.persistence.storage is set to zero.", sts.GetName()))
 		} else {
 			volumeClaimTemplatesOverride := stsOverride.Spec.VolumeClaimTemplates
 			pvcOverride := make([]corev1.PersistentVolumeClaim, len(volumeClaimTemplatesOverride))
@@ -183,6 +189,10 @@ func applyStsOverride(instance *rabbitmqv1beta1.RabbitmqCluster, scheme *runtime
 			}
 			sts.Spec.VolumeClaimTemplates = pvcOverride
 		}
+	}
+
+	if stsOverride.Spec.PersistentVolumeClaimRetentionPolicy != nil {
+		sts.Spec.PersistentVolumeClaimRetentionPolicy = stsOverride.Spec.PersistentVolumeClaimRetentionPolicy
 	}
 
 	if stsOverride.Spec.Template == nil {
@@ -238,7 +248,7 @@ func persistentVolumeClaim(instance *rabbitmqv1beta1.RabbitmqCluster, scheme *ru
 func disableBlockOwnerDeletion(pvc corev1.PersistentVolumeClaim) {
 	refs := pvc.OwnerReferences
 	for i := range refs {
-		refs[i].BlockOwnerDeletion = pointer.BoolPtr(false)
+		refs[i].BlockOwnerDeletion = pointer.Bool(false)
 	}
 }
 
@@ -327,7 +337,7 @@ func sortVolumeMounts(mounts []corev1.VolumeMount) {
 
 func (builder *StatefulSetBuilder) podTemplateSpec(previousPodAnnotations map[string]string) corev1.PodTemplateSpec {
 	// default pod annotations
-	defaultPodAnnotations := make(map[string]string, 0)
+	defaultPodAnnotations := make(map[string]string)
 
 	if builder.Instance.VaultEnabled() {
 		defaultPodAnnotations = appendVaultAnnotations(defaultPodAnnotations, builder.Instance)
@@ -413,11 +423,13 @@ func (builder *StatefulSetBuilder) podTemplateSpec(previousPodAnnotations map[st
 		},
 	}
 
-	if !builder.Instance.VaultDefaultUserSecretEnabled() {
-		appendDefaultUserSecretVolumeProjection(volumes, builder.Instance)
+	if !builder.Instance.VaultDefaultUserSecretEnabled() && !builder.Instance.ExternalSecretEnabled() {
+		appendDefaultUserSecretVolumeProjection(volumes, builder.Instance, "")
+	} else if builder.Instance.ExternalSecretEnabled() {
+		appendDefaultUserSecretVolumeProjection(volumes, builder.Instance, builder.Instance.Spec.SecretBackend.ExternalSecret.Name)
 	}
 
-	if builder.Instance.Spec.Rabbitmq.AdvancedConfig != "" || builder.Instance.Spec.Rabbitmq.EnvConfig != "" {
+	if builder.rabbitmqConfigurationIsSet() {
 		volumes = append(volumes, corev1.Volume{
 			Name: "server-conf",
 			VolumeSource: corev1.VolumeSource{
@@ -484,6 +496,12 @@ func (builder *StatefulSetBuilder) podTemplateSpec(previousPodAnnotations map[st
 		})
 	}
 
+	if builder.Instance.Spec.Rabbitmq.ErlangInetConfig != "" {
+		rabbitmqContainerVolumeMounts = append(rabbitmqContainerVolumeMounts, corev1.VolumeMount{
+			Name: "server-conf", MountPath: "/etc/rabbitmq/erl_inetrc", SubPath: "erl_inetrc",
+		})
+	}
+
 	tlsSpec := builder.Instance.Spec.TLS
 	if builder.Instance.SecretTLSEnabled() {
 		rabbitmqContainerVolumeMounts = append(rabbitmqContainerVolumeMounts, corev1.VolumeMount{
@@ -493,7 +511,7 @@ func (builder *StatefulSetBuilder) podTemplateSpec(previousPodAnnotations map[st
 		})
 
 		secretEnforced := true
-		filePermissions := pointer.Int32Ptr(400)
+		filePermissions := pointer.Int32(400)
 		tlsProjectedVolume := corev1.Volume{
 			Name: "rabbitmq-tls",
 			VolumeSource: corev1.VolumeSource{
@@ -630,6 +648,12 @@ func (builder *StatefulSetBuilder) podTemplateSpec(previousPodAnnotations map[st
 	return podTemplateSpec
 }
 
+func (builder *StatefulSetBuilder) rabbitmqConfigurationIsSet() bool {
+	return builder.Instance.Spec.Rabbitmq.AdvancedConfig != "" ||
+		builder.Instance.Spec.Rabbitmq.EnvConfig != "" ||
+		builder.Instance.Spec.Rabbitmq.ErlangInetConfig != ""
+}
+
 func defaultUserCredentialUpdater(instance *rabbitmqv1beta1.RabbitmqCluster) corev1.Container {
 	managementURI := "http://127.0.0.1:15672"
 	if instance.TLSEnabled() {
@@ -711,19 +735,20 @@ func setupContainer(instance *rabbitmqv1beta1.RabbitmqCluster) corev1.Container 
 	//Init Container resources
 	cpuRequest := k8sresource.MustParse(initContainerCPU)
 	memoryRequest := k8sresource.MustParse(initContainerMemory)
-
+	command := []string{
+		"sh", "-c",
+		"cp /tmp/erlang-cookie-secret/.erlang.cookie /var/lib/rabbitmq/.erlang.cookie " +
+			"&& chmod 600 /var/lib/rabbitmq/.erlang.cookie ; " +
+			"cp /tmp/rabbitmq-plugins/enabled_plugins /operator/enabled_plugins ; " +
+			"echo '[default]' > /var/lib/rabbitmq/.rabbitmqadmin.conf " +
+			"&& sed -e 's/default_user/username/' -e 's/default_pass/password/' %s >> /var/lib/rabbitmq/.rabbitmqadmin.conf " +
+			"&& chmod 600 /var/lib/rabbitmq/.rabbitmqadmin.conf ; " +
+			"sleep " + strconv.Itoa(int(pointer.Int32Deref(instance.Spec.DelayStartSeconds, 30))),
+	}
 	setupContainer := corev1.Container{
-		Name:  "setup-container",
-		Image: instance.Spec.Image,
-		Command: []string{
-			"sh", "-c",
-			"cp /tmp/erlang-cookie-secret/.erlang.cookie /var/lib/rabbitmq/.erlang.cookie " +
-				"&& chmod 600 /var/lib/rabbitmq/.erlang.cookie ; " +
-				"cp /tmp/rabbitmq-plugins/enabled_plugins /operator/enabled_plugins ; " +
-				"echo '[default]' > /var/lib/rabbitmq/.rabbitmqadmin.conf " +
-				"&& sed -e 's/default_user/username/' -e 's/default_pass/password/' %s >> /var/lib/rabbitmq/.rabbitmqadmin.conf " +
-				"&& chmod 600 /var/lib/rabbitmq/.rabbitmqadmin.conf",
-		},
+		Name:    "setup-container",
+		Image:   instance.Spec.Image,
+		Command: command,
 		Resources: corev1.ResourceRequirements{
 			Limits: corev1.ResourceList{
 				"cpu":    cpuRequest,
@@ -772,14 +797,19 @@ func setupContainer(instance *rabbitmqv1beta1.RabbitmqCluster) corev1.Container 
 	return setupContainer
 }
 
-func appendDefaultUserSecretVolumeProjection(volumes []corev1.Volume, instance *rabbitmqv1beta1.RabbitmqCluster) {
+func appendDefaultUserSecretVolumeProjection(volumes []corev1.Volume, instance *rabbitmqv1beta1.RabbitmqCluster, secretName string) {
+
+	if secretName == "" {
+		secretName = instance.ChildResourceName(DefaultUserSecretName)
+	}
+
 	for _, value := range volumes {
 		if value.Name == "rabbitmq-confd" {
 			value.VolumeSource.Projected.Sources = append(value.VolumeSource.Projected.Sources,
 				corev1.VolumeProjection{
 					Secret: &corev1.SecretProjection{
 						LocalObjectReference: corev1.LocalObjectReference{
-							Name: instance.ChildResourceName(DefaultUserSecretName),
+							Name: secretName,
 						},
 						Items: []corev1.KeyToPath{
 							{
@@ -847,7 +877,7 @@ default_pass = {{ .Data.data.password }}
 func podHostNames(instance *rabbitmqv1beta1.RabbitmqCluster) string {
 	altNames := ""
 	var i int32
-	for i = 0; i < pointer.Int32PtrDerefOr(instance.Spec.Replicas, 1); i++ {
+	for i = 0; i < pointer.Int32Deref(instance.Spec.Replicas, 1); i++ {
 		altNames += fmt.Sprintf(",%s", fmt.Sprintf("%s-%d.%s.%s", instance.ChildResourceName(stsSuffix), i, instance.ChildResourceName(headlessServiceSuffix), instance.Namespace))
 	}
 	return strings.TrimPrefix(altNames, ",")

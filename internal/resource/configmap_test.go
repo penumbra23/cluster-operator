@@ -12,11 +12,12 @@ package resource_test
 import (
 	"bytes"
 	"fmt"
+	"k8s.io/utils/pointer"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	rabbitmqv1beta1 "github.com/rabbitmq/cluster-operator/api/v1beta1"
-	"github.com/rabbitmq/cluster-operator/internal/resource"
+	rabbitmqv1beta1 "github.com/rabbitmq/cluster-operator/v2/api/v1beta1"
+	"github.com/rabbitmq/cluster-operator/v2/internal/resource"
 	"gopkg.in/ini.v1"
 	corev1 "k8s.io/api/core/v1"
 	k8sresource "k8s.io/apimachinery/pkg/api/resource"
@@ -27,15 +28,14 @@ import (
 
 func defaultRabbitmqConf(instanceName string) string {
 	return iniString(`
-cluster_formation.peer_discovery_backend = rabbit_peer_discovery_k8s
-cluster_formation.k8s.host               = kubernetes.default
-cluster_formation.k8s.address_type       = hostname
-cluster_partition_handling               = pause_minority
-queue_master_locator                     = min-masters
-disk_free_limit.absolute                 = 2GB
-cluster_formation.randomized_startup_delay_range.min = 0
-cluster_formation.randomized_startup_delay_range.max = 60
-cluster_name                             = ` + instanceName)
+queue_master_locator                       = min-masters
+disk_free_limit.absolute                   = 2GB
+cluster_partition_handling                 = pause_minority
+cluster_formation.peer_discovery_backend   = rabbit_peer_discovery_k8s
+cluster_formation.k8s.host                 = kubernetes.default
+cluster_formation.k8s.address_type         = hostname
+cluster_formation.target_cluster_size_hint = 1
+cluster_name                               = ` + instanceName)
 }
 
 var _ = Describe("GenerateServerConfigMap", func() {
@@ -145,6 +145,16 @@ var _ = Describe("GenerateServerConfigMap", func() {
 			Expect(configMap.Data).To(HaveKeyWithValue("operatorDefaults.conf", expectedConfiguration))
 		})
 
+		It("sets cluster size hint", func() {
+			builder.Instance.Spec.Rabbitmq.AdditionalConfig = ""
+			builder.Instance.Spec.Replicas = pointer.Int32(100)
+
+			Expect(configMapBuilder.Update(configMap)).To(Succeed())
+			operatorDefaultConf, err := ini.Load([]byte(configMap.Data["operatorDefaults.conf"]))
+			Expect(err).To(Not(HaveOccurred()))
+			Expect(operatorDefaultConf.Section("").KeysHash()).To(HaveKeyWithValue("cluster_formation.target_cluster_size_hint", "100"))
+		})
+
 		When("valid userDefinedConfiguration is provided", func() {
 			It("adds configurations in a new rabbitmq configuration", func() {
 				userDefinedConfiguration := "cluster_formation.peer_discovery_backend = my-backend\n" +
@@ -173,7 +183,7 @@ var _ = Describe("GenerateServerConfigMap", func() {
 				Expect(configMap.Data).To(HaveKeyWithValue("advanced.config", "[my-awesome-config]."))
 			})
 
-			It("does set data.advancedConfig when empty", func() {
+			It("does not set data.advancedConfig when empty", func() {
 				instance.Spec.Rabbitmq.AdvancedConfig = ""
 				Expect(configMapBuilder.Update(configMap)).To(Succeed())
 				Expect(configMap.Data).ToNot(HaveKey("advanced.config"))
@@ -377,6 +387,7 @@ CONSOLE_LOG=new`
 						Name: "rabbit-tls",
 					},
 					Spec: rabbitmqv1beta1.RabbitmqClusterSpec{
+						Replicas: pointer.Int32(1),
 						TLS: rabbitmqv1beta1.TLSSpec{
 							SecretName:             "some-secret",
 							DisableNonTLSListeners: true,
@@ -408,6 +419,7 @@ CONSOLE_LOG=new`
 						Name: "rabbit-tls",
 					},
 					Spec: rabbitmqv1beta1.RabbitmqClusterSpec{
+						Replicas: pointer.Int32(1),
 						TLS: rabbitmqv1beta1.TLSSpec{
 							SecretName:             "some-secret",
 							DisableNonTLSListeners: true,
@@ -455,6 +467,7 @@ CONSOLE_LOG=new`
 						Name: "rabbit-tls",
 					},
 					Spec: rabbitmqv1beta1.RabbitmqClusterSpec{
+						Replicas: pointer.Int32(1),
 						TLS: rabbitmqv1beta1.TLSSpec{
 							SecretName:             "some-secret",
 							CaSecretName:           "some-mutual-secret",
@@ -545,6 +558,26 @@ CONSOLE_LOG=new`
 			}
 			Expect(configMapBuilder.Update(configMap)).To(Succeed())
 			Expect(configMap.Annotations).To(BeEmpty())
+		})
+
+		Context("Erlang INET configuration", func() {
+			It("sets erlangInetRc key", func() {
+				instance.Spec.Rabbitmq.ErlangInetConfig = "{any-config, is-set}."
+				Expect(configMapBuilder.Update(configMap)).To(Succeed())
+				Expect(configMap.Data).To(HaveKeyWithValue("erl_inetrc", "{any-config, is-set}."))
+			})
+
+			When("erlangInetRc is removed", func() {
+				It("deletes the key", func() {
+					instance.Spec.Rabbitmq.ErlangInetConfig = "any string is set, rabbit will do validation"
+					Expect(configMapBuilder.Update(configMap)).To(Succeed())
+					Expect(configMap.Data).To(HaveKey("erl_inetrc"))
+
+					instance.Spec.Rabbitmq.ErlangInetConfig = ""
+					Expect(configMapBuilder.Update(configMap)).To(Succeed())
+					Expect(configMap.Data).ToNot(HaveKey("erl_inetrc"))
+				})
+			})
 		})
 	})
 

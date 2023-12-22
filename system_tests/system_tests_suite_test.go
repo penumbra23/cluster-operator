@@ -18,7 +18,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	rabbitmqv1beta1 "github.com/rabbitmq/cluster-operator/api/v1beta1"
+	rabbitmqv1beta1 "github.com/rabbitmq/cluster-operator/v2/api/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	defaultscheme "k8s.io/client-go/kubernetes/scheme"
@@ -52,11 +52,12 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 
 	namespace = MustHaveEnv("NAMESPACE")
+	operatorNamespace := MustHaveEnv("K8S_OPERATOR_NAMESPACE")
 
 	ctx := context.Background()
 
 	Eventually(func() int32 {
-		operatorDeployment, err := clientSet.AppsV1().Deployments(namespace).Get(ctx, "rabbitmq-cluster-operator", metav1.GetOptions{})
+		operatorDeployment, err := clientSet.AppsV1().Deployments(operatorNamespace).Get(ctx, "rabbitmq-cluster-operator", metav1.GetOptions{})
 		ExpectWithOffset(1, err).NotTo(HaveOccurred())
 
 		return operatorDeployment.Status.ReadyReplicas

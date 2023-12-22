@@ -13,8 +13,8 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/gstruct"
-	rabbitmqv1beta1 "github.com/rabbitmq/cluster-operator/api/v1beta1"
-	"github.com/rabbitmq/cluster-operator/internal/resource"
+	rabbitmqv1beta1 "github.com/rabbitmq/cluster-operator/v2/api/v1beta1"
+	"github.com/rabbitmq/cluster-operator/v2/internal/resource"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	k8sresource "k8s.io/apimachinery/pkg/api/resource"
@@ -127,8 +127,8 @@ var _ = Describe("StatefulSet", func() {
 								Kind:               "RabbitmqCluster",
 								Name:               instance.Name,
 								UID:                "",
-								Controller:         pointer.BoolPtr(true),
-								BlockOwnerDeletion: pointer.BoolPtr(false),
+								Controller:         pointer.Bool(true),
+								BlockOwnerDeletion: pointer.Bool(false),
 							},
 						},
 						Annotations: map[string]string{},
@@ -276,7 +276,7 @@ var _ = Describe("StatefulSet", func() {
 			Expect(stsBuilder.Update(statefulSet)).To(Succeed())
 			updateStrategy := appsv1.StatefulSetUpdateStrategy{
 				RollingUpdate: &appsv1.RollingUpdateStatefulSetStrategy{
-					Partition: pointer.Int32Ptr(0),
+					Partition: pointer.Int32(0),
 				},
 				Type: appsv1.RollingUpdateStatefulSetStrategyType,
 			}
@@ -412,7 +412,7 @@ var _ = Describe("StatefulSet", func() {
 				It("updates Prometheus port", func() {
 					stsBuilder.Instance.Spec.TLS.SecretName = "tls-secret"
 					Expect(stsBuilder.Update(statefulSet)).To(Succeed())
-					expectedPodAnnotations := make(map[string]string, 0)
+					expectedPodAnnotations := make(map[string]string)
 					Expect(statefulSet.Spec.Template.Annotations).To(Equal(expectedPodAnnotations))
 				})
 			})
@@ -530,11 +530,11 @@ var _ = Describe("StatefulSet", func() {
 										LocalObjectReference: corev1.LocalObjectReference{
 											Name: "tls-secret",
 										},
-										Optional: pointer.BoolPtr(true),
+										Optional: pointer.Bool(true),
 									},
 								},
 							},
-							DefaultMode: pointer.Int32Ptr(400),
+							DefaultMode: pointer.Int32(400),
 						},
 					},
 				}))
@@ -607,6 +607,21 @@ var _ = Describe("StatefulSet", func() {
 				}))
 			})
 
+			It("opens tls port for stream when rabbitmq_stream_management is enabled", func() {
+				instance.Spec.TLS.SecretName = "tls-secret"
+				instance.Spec.Rabbitmq.AdditionalPlugins = []rabbitmqv1beta1.Plugin{"rabbitmq_stream_management"}
+				Expect(stsBuilder.Update(statefulSet)).To(Succeed())
+
+				rabbitmqContainerSpec := extractContainer(statefulSet.Spec.Template.Spec.Containers, "rabbitmq")
+
+				Expect(rabbitmqContainerSpec.Ports).To(ContainElements([]corev1.ContainerPort{
+					{
+						Name:          "streams",
+						ContainerPort: 5551,
+					},
+				}))
+			})
+
 			When("Mutual TLS (same secret) is enabled", func() {
 				It("opens tls ports when rabbitmq_web_mqtt and rabbitmq_web_stomp are configured", func() {
 					instance.Spec.TLS.SecretName = "tls-secret"
@@ -645,7 +660,7 @@ var _ = Describe("StatefulSet", func() {
 											LocalObjectReference: corev1.LocalObjectReference{
 												Name: "tls-secret",
 											},
-											Optional: pointer.BoolPtr(true),
+											Optional: pointer.Bool(true),
 										},
 									},
 									{
@@ -653,11 +668,11 @@ var _ = Describe("StatefulSet", func() {
 											LocalObjectReference: corev1.LocalObjectReference{
 												Name: "mutual-tls-secret",
 											},
-											Optional: pointer.BoolPtr(true),
+											Optional: pointer.Bool(true),
 										},
 									},
 								},
-								DefaultMode: pointer.Int32Ptr(400),
+								DefaultMode: pointer.Int32(400),
 							},
 						},
 					}))
@@ -693,7 +708,8 @@ var _ = Describe("StatefulSet", func() {
 				})
 
 				It("disables non tls ports for mqtt, stomp and stream if enabled", func() {
-					instance.Spec.Rabbitmq.AdditionalPlugins = []rabbitmqv1beta1.Plugin{"rabbitmq_mqtt", "rabbitmq_stomp", "rabbitmq_stream", "rabbitmq_multi_dc_replication"}
+					instance.Spec.Rabbitmq.AdditionalPlugins = []rabbitmqv1beta1.Plugin{"rabbitmq_mqtt", "rabbitmq_stomp",
+						"rabbitmq_stream", "rabbitmq_multi_dc_replication", "rabbitmq_stream_management"}
 					Expect(stsBuilder.Update(statefulSet)).To(Succeed())
 
 					rabbitmqContainerSpec := extractContainer(statefulSet.Spec.Template.Spec.Containers, "rabbitmq")
@@ -811,12 +827,14 @@ var _ = Describe("StatefulSet", func() {
 				container := extractContainer(statefulSet.Spec.Template.Spec.Containers, "rabbitmq")
 				Expect(container.Ports).To(ContainElement(expectedPort))
 			},
-			Entry("MQTT", "rabbitmq_mqtt", "mqtt", 1883),
-			Entry("MQTT-over-WebSockets", "rabbitmq_web_mqtt", "web-mqtt", 15675),
-			Entry("STOMP", "rabbitmq_stomp", "stomp", 61613),
-			Entry("STOMP-over-WebSockets", "rabbitmq_web_stomp", "web-stomp", 15674),
-			Entry("Stream", "rabbitmq_stream", "stream", 5552),
-			Entry("OSR", "rabbitmq_multi_dc_replication", "stream", 5552),
+			EntryDescription("%s plugin is enabled"),
+			Entry(nil, "rabbitmq_mqtt", "mqtt", 1883),
+			Entry(nil, "rabbitmq_web_mqtt", "web-mqtt", 15675),
+			Entry(nil, "rabbitmq_stomp", "stomp", 61613),
+			Entry(nil, "rabbitmq_web_stomp", "web-stomp", 15674),
+			Entry(nil, "rabbitmq_stream", "stream", 5552),
+			Entry(nil, "rabbitmq_multi_dc_replication", "stream", 5552),
+			Entry(nil, "rabbitmq_stream_management", "stream", 5552),
 		)
 
 		It("uses required Environment Variables", func() {
@@ -868,6 +886,25 @@ var _ = Describe("StatefulSet", func() {
 			Expect(container.Env).To(ConsistOf(requiredEnvVariables))
 		})
 
+		Context("ExternalSecret", func() {
+			When("SecretBackend.ExternalSecret is set", func() {
+				JustBeforeEach(func() {
+					Expect(stsBuilder.Update(statefulSet)).To(Succeed())
+				})
+				BeforeEach(func() {
+					instance.Spec.SecretBackend.ExternalSecret.Name = "my-secret"
+				})
+
+				It("does not project default user secret to rabbitmq-confd volume", func() {
+					rabbitmqConfdVolume := extractVolume(statefulSet.Spec.Template.Spec.Volumes, "rabbitmq-confd")
+					defaultUserSecret := extractProjectedSecret(rabbitmqConfdVolume, "foo-default-user")
+					Expect(defaultUserSecret.Secret).To(BeNil())
+				})
+
+			})
+
+		})
+
 		Context("Vault", func() {
 			BeforeEach(func() {
 				instance.Spec.SecretBackend.Vault = &rabbitmqv1beta1.VaultSpec{
@@ -910,7 +947,7 @@ default_pass = {{ .Data.data.password }}
 					})
 					It("overrides operator-set Vault annotations", func() {
 						a := statefulSet.Spec.Template.Annotations
-						// user overriden annotations
+						// user overridden annotations
 						Expect(a).To(HaveKeyWithValue("vault.hashicorp.com/agent-init-first", "false"))
 						Expect(a).To(HaveKeyWithValue("mykey", "myval"))
 						// opererator-set annotations
@@ -935,7 +972,7 @@ default_pass = {{ .Data.data.password }}
 								"cp /tmp/rabbitmq-plugins/enabled_plugins /operator/enabled_plugins ; "+
 								"echo '[default]' > /var/lib/rabbitmq/.rabbitmqadmin.conf "+
 								"&& sed -e 's/default_user/username/' -e 's/default_pass/password/' /etc/rabbitmq/conf.d/11-default_user.conf >> /var/lib/rabbitmq/.rabbitmqadmin.conf "+
-								"&& chmod 600 /var/lib/rabbitmq/.rabbitmqadmin.conf",
+								"&& chmod 600 /var/lib/rabbitmq/.rabbitmqadmin.conf ; sleep 30",
 						),
 						"VolumeMounts": Not(ContainElement([]corev1.VolumeMount{
 							{
@@ -1103,10 +1140,11 @@ default_pass = {{ .Data.data.password }}
 
 		Context("Rabbitmq container volume mounts", func() {
 			DescribeTable("Volume mounts depending on spec configuration and '/var/lib/rabbitmq/' always mounts before '/var/lib/rabbitmq/mnesia/' ",
-				func(rabbitmqEnv, advancedConfig string) {
+				func(rabbitmqEnv, advancedConfig, erlInet string) {
 					stsBuilder := builder.StatefulSet()
 					stsBuilder.Instance.Spec.Rabbitmq.EnvConfig = rabbitmqEnv
 					stsBuilder.Instance.Spec.Rabbitmq.AdvancedConfig = advancedConfig
+					stsBuilder.Instance.Spec.Rabbitmq.ErlangInetConfig = erlInet
 					Expect(stsBuilder.Update(statefulSet)).To(Succeed())
 
 					expectedVolumeMounts := []corev1.VolumeMount{
@@ -1129,6 +1167,11 @@ default_pass = {{ .Data.data.password }}
 							Name: "server-conf", MountPath: "/etc/rabbitmq/advanced.config", SubPath: "advanced.config"})
 					}
 
+					if erlInet != "" {
+						expectedVolumeMounts = append(expectedVolumeMounts, corev1.VolumeMount{
+							Name: "server-conf", MountPath: "/etc/rabbitmq/erl_inetrc", SubPath: "erl_inetrc"})
+					}
+
 					container := extractContainer(statefulSet.Spec.Template.Spec.Containers, "rabbitmq")
 					Expect(container.VolumeMounts).To(ConsistOf(expectedVolumeMounts))
 					Expect(container.VolumeMounts[0]).To(Equal(corev1.VolumeMount{
@@ -1140,18 +1183,23 @@ default_pass = {{ .Data.data.password }}
 						MountPath: "/var/lib/rabbitmq/mnesia/",
 					}))
 				},
-				Entry("Both env and advanced configs are set", "rabbitmq-env-is-set", "advanced-config-is-set"),
-				Entry("Only env config is set", "rabbitmq-env-is-set", ""),
-				Entry("Only advanced config is set", "", "advanced-config-is-set"),
-				Entry("No configs are set", "", ""),
+				Entry("All env + advanced + erl-inet configs are set", "rabbitmq-env-is-set", "advanced-config-is-set", "erl-inet-rc-is-set"),
+				Entry("Both env and advanced configs are set", "rabbitmq-env-is-set", "advanced-config-is-set", ""),
+				Entry("Both advanced and erl-inet configs are set", "", "advanced-config-is-set", "erl-inet-rc-is-set"),
+				Entry("Both env and erl-inet configs are set", "rabbitmq-env-is-set", "", "erl-inet-rc-is-set"),
+				Entry("Only env config is set", "rabbitmq-env-is-set", "", ""),
+				Entry("Only advanced config is set", "", "advanced-config-is-set", ""),
+				Entry("Only erl-inet config is set", "", "", "erl-inet-rc-is-set"),
+				Entry("No configs are set", "", "", ""),
 			)
 		})
 
 		Context("Volumes", func() {
-			DescribeTable("Volumes based on user configuration", func(rabbitmqEnv, advancedConfig string) {
+			DescribeTable("Volumes based on user configuration", func(rabbitmqEnv, advancedConfig, erlInetRc string) {
 				stsBuilder := builder.StatefulSet()
 				stsBuilder.Instance.Spec.Rabbitmq.EnvConfig = rabbitmqEnv
 				stsBuilder.Instance.Spec.Rabbitmq.AdvancedConfig = advancedConfig
+				stsBuilder.Instance.Spec.Rabbitmq.ErlangInetConfig = erlInetRc
 				Expect(stsBuilder.Update(statefulSet)).To(Succeed())
 
 				expectedVolumes := []corev1.Volume{
@@ -1242,7 +1290,7 @@ default_pass = {{ .Data.data.password }}
 					},
 				}
 
-				if rabbitmqEnv != "" || advancedConfig != "" {
+				if rabbitmqEnv != "" || advancedConfig != "" || erlInetRc != "" {
 					expectedVolumes = append(expectedVolumes, corev1.Volume{
 						Name: "server-conf",
 						VolumeSource: corev1.VolumeSource{
@@ -1255,10 +1303,14 @@ default_pass = {{ .Data.data.password }}
 				Expect(statefulSet.Spec.Template.Spec.Volumes).To(ConsistOf(expectedVolumes))
 
 			},
-				Entry("Both env and advanced configs are set", "rabbitmq-env-is-set", "advanced-config-is-set"),
-				Entry("Only env config is set", "rabbitmq-env-is-set", ""),
-				Entry("Only advanced config is set", "", "advanced-config-is-set"),
-				Entry("No configs are set", "", ""),
+				Entry("All env + advanced + erl-inet configs are set", "rabbitmq-env-is-set", "advanced-config-is-set", "erl-inet-rc-is-set"),
+				Entry("Both env and advanced configs are set", "rabbitmq-env-is-set", "advanced-config-is-set", ""),
+				Entry("Both advanced and erl-inet configs are set", "", "advanced-config-is-set", "erl-inet-rc-is-set"),
+				Entry("Both env and erl-inet configs are set", "rabbitmq-env-is-set", "", "erl-inet-rc-is-set"),
+				Entry("Only env config is set", "rabbitmq-env-is-set", "", ""),
+				Entry("Only advanced config is set", "", "advanced-config-is-set", ""),
+				Entry("Only erl-inet config is set", "", "", "erl-inet-rc-is-set"),
+				Entry("No configs are set", "", "", ""),
 			)
 
 			It("defines an emptyDir volume when storage == 0", func() {
@@ -1333,7 +1385,7 @@ default_pass = {{ .Data.data.password }}
 						"cp /tmp/rabbitmq-plugins/enabled_plugins /operator/enabled_plugins ; "+
 						"echo '[default]' > /var/lib/rabbitmq/.rabbitmqadmin.conf "+
 						"&& sed -e 's/default_user/username/' -e 's/default_pass/password/' /tmp/default_user.conf >> /var/lib/rabbitmq/.rabbitmqadmin.conf "+
-						"&& chmod 600 /var/lib/rabbitmq/.rabbitmqadmin.conf",
+						"&& chmod 600 /var/lib/rabbitmq/.rabbitmqadmin.conf ; sleep 30",
 				),
 				"VolumeMounts": ConsistOf([]corev1.VolumeMount{
 					{
@@ -1366,7 +1418,7 @@ default_pass = {{ .Data.data.password }}
 		})
 
 		It("sets TerminationGracePeriodSeconds in podTemplate as provided in instance spec", func() {
-			instance.Spec.TerminationGracePeriodSeconds = pointer.Int64Ptr(10)
+			instance.Spec.TerminationGracePeriodSeconds = pointer.Int64(10)
 			builder = &resource.RabbitmqResourceBuilder{
 				Instance: &instance,
 				Scheme:   scheme,
@@ -1376,7 +1428,7 @@ default_pass = {{ .Data.data.password }}
 			Expect(stsBuilder.Update(statefulSet)).To(Succeed())
 
 			gracePeriodSeconds := statefulSet.Spec.Template.Spec.TerminationGracePeriodSeconds
-			Expect(gracePeriodSeconds).To(Equal(pointer.Int64Ptr(10)))
+			Expect(gracePeriodSeconds).To(Equal(pointer.Int64(10)))
 
 			// TerminationGracePeriodSeconds is used to set commands timeouts in the preStop hook
 			expectedPreStopCommand := []string{"/bin/bash", "-c", "if [ ! -z \"$(cat /etc/pod-info/skipPreStopChecks)\" ]; then exit 0; fi; rabbitmq-upgrade await_online_quorum_plus_one -t 10; rabbitmq-upgrade await_online_synchronized_mirror -t 10; rabbitmq-upgrade drain -t 10"}
@@ -1462,7 +1514,7 @@ default_pass = {{ .Data.data.password }}
 		})
 
 		It("sets the replica count of the StatefulSet to the instance value", func() {
-			instance.Spec.Replicas = pointer.Int32Ptr(3)
+			instance.Spec.Replicas = pointer.Int32(3)
 			builder = &resource.RabbitmqResourceBuilder{
 				Instance: &instance,
 				Scheme:   scheme,
@@ -1598,13 +1650,25 @@ default_pass = {{ .Data.data.password }}
 			It("overrides statefulSet.spec.replicas", func() {
 				instance.Spec.Override.StatefulSet = &rabbitmqv1beta1.StatefulSet{
 					Spec: &rabbitmqv1beta1.StatefulSetSpec{
-						Replicas: pointer.Int32Ptr(10),
+						Replicas: pointer.Int32(10),
 					},
 				}
 
 				stsBuilder := builder.StatefulSet()
 				Expect(stsBuilder.Update(statefulSet)).To(Succeed())
 				Expect(*statefulSet.Spec.Replicas).To(Equal(int32(10)))
+			})
+
+			It("overrides statefulSet.spec.MinReadySeconds", func() {
+				instance.Spec.Override.StatefulSet = &rabbitmqv1beta1.StatefulSet{
+					Spec: &rabbitmqv1beta1.StatefulSetSpec{
+						MinReadySeconds: 10,
+					},
+				}
+
+				stsBuilder := builder.StatefulSet()
+				Expect(stsBuilder.Update(statefulSet)).To(Succeed())
+				Expect(statefulSet.Spec.MinReadySeconds).To(Equal(int32(10)))
 			})
 
 			It("overrides statefulSet.spec.podManagementPolicy", func() {
@@ -1625,7 +1689,7 @@ default_pass = {{ .Data.data.password }}
 						UpdateStrategy: &appsv1.StatefulSetUpdateStrategy{
 							Type: "OnDelete",
 							RollingUpdate: &appsv1.RollingUpdateStatefulSetStrategy{
-								Partition: pointer.Int32Ptr(1),
+								Partition: pointer.Int32(1),
 							},
 						},
 					},
@@ -1635,6 +1699,22 @@ default_pass = {{ .Data.data.password }}
 				Expect(stsBuilder.Update(statefulSet)).To(Succeed())
 				Expect(string(statefulSet.Spec.UpdateStrategy.Type)).To(Equal("OnDelete"))
 				Expect(*statefulSet.Spec.UpdateStrategy.RollingUpdate.Partition).To(Equal(int32(1)))
+			})
+
+			It("overrides statefulSet.spec.persistentVolumeClaimRetentionPolicy", func() {
+				instance.Spec.Override.StatefulSet = &rabbitmqv1beta1.StatefulSet{
+					Spec: &rabbitmqv1beta1.StatefulSetSpec{
+						PersistentVolumeClaimRetentionPolicy: &appsv1.StatefulSetPersistentVolumeClaimRetentionPolicy{
+							WhenDeleted: "Retain",
+							WhenScaled:  "Delete",
+						},
+					},
+				}
+
+				stsBuilder := builder.StatefulSet()
+				Expect(stsBuilder.Update(statefulSet)).To(Succeed())
+				Expect(string(statefulSet.Spec.PersistentVolumeClaimRetentionPolicy.WhenScaled)).To(Equal("Delete"))
+				Expect(string(statefulSet.Spec.PersistentVolumeClaimRetentionPolicy.WhenDeleted)).To(Equal("Retain"))
 			})
 
 			It("overrides the PVC list", func() {
@@ -1687,8 +1767,8 @@ default_pass = {{ .Data.data.password }}
 									Kind:               "RabbitmqCluster",
 									Name:               instance.Name,
 									UID:                "",
-									Controller:         pointer.BoolPtr(true),
-									BlockOwnerDeletion: pointer.BoolPtr(false),
+									Controller:         pointer.Bool(true),
+									BlockOwnerDeletion: pointer.Bool(false),
 								},
 							},
 						},
@@ -1711,8 +1791,8 @@ default_pass = {{ .Data.data.password }}
 									Kind:               "RabbitmqCluster",
 									Name:               instance.Name,
 									UID:                "",
-									Controller:         pointer.BoolPtr(true),
-									BlockOwnerDeletion: pointer.BoolPtr(false),
+									Controller:         pointer.Bool(true),
+									BlockOwnerDeletion: pointer.Bool(false),
 								},
 							},
 						},
@@ -1776,8 +1856,8 @@ default_pass = {{ .Data.data.password }}
 									Kind:               "RabbitmqCluster",
 									Name:               instance.Name,
 									UID:                "",
-									Controller:         pointer.BoolPtr(true),
-									BlockOwnerDeletion: pointer.BoolPtr(false),
+									Controller:         pointer.Bool(true),
+									BlockOwnerDeletion: pointer.Bool(false),
 								},
 							},
 						},
@@ -1800,8 +1880,8 @@ default_pass = {{ .Data.data.password }}
 									Kind:               "RabbitmqCluster",
 									Name:               instance.Name,
 									UID:                "",
-									Controller:         pointer.BoolPtr(true),
-									BlockOwnerDeletion: pointer.BoolPtr(false),
+									Controller:         pointer.Bool(true),
+									BlockOwnerDeletion: pointer.Bool(false),
 								},
 							},
 						},
@@ -2207,11 +2287,11 @@ default_pass = {{ .Data.data.password }}
 
 			It("ensures override takes precedence when same property is set both at the top level and at the override level", func() {
 				instance.Spec.Image = "should-be-replaced-image"
-				instance.Spec.Replicas = pointer.Int32Ptr(2)
+				instance.Spec.Replicas = pointer.Int32(2)
 
 				instance.Spec.Override.StatefulSet = &rabbitmqv1beta1.StatefulSet{
 					Spec: &rabbitmqv1beta1.StatefulSetSpec{
-						Replicas: pointer.Int32Ptr(4),
+						Replicas: pointer.Int32(4),
 						Template: &rabbitmqv1beta1.PodTemplateSpec{
 							Spec: &corev1.PodSpec{
 								Containers: []corev1.Container{
@@ -2277,10 +2357,11 @@ func generateRabbitmqCluster() rabbitmqv1beta1.RabbitmqCluster {
 			Namespace: "foo-namespace",
 		},
 		Spec: rabbitmqv1beta1.RabbitmqClusterSpec{
-			Replicas:                      pointer.Int32Ptr(1),
+			Replicas:                      pointer.Int32(1),
 			Image:                         "rabbitmq-image-from-cr",
 			ImagePullSecrets:              []corev1.LocalObjectReference{{Name: "my-super-secret"}},
-			TerminationGracePeriodSeconds: pointer.Int64Ptr(604800),
+			TerminationGracePeriodSeconds: pointer.Int64(604800),
+			DelayStartSeconds:             pointer.Int32(30),
 			Service: rabbitmqv1beta1.RabbitmqClusterServiceSpec{
 				Type:        "this-is-a-service",
 				Annotations: map[string]string{},

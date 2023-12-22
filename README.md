@@ -37,7 +37,7 @@ under `site/kubernetes`.
 
 ## Supported Versions
 
-The operator deploys RabbitMQ `3.10.2` by default, and supports versions from `3.8.8` upwards. The operator requires Kubernetes `1.19` or newer.
+The operator deploys RabbitMQ `3.12.2` by default, and supports versions from `3.9.9` upwards. The operator requires Kubernetes `1.19` or newer.
 
 ## Versioning
 
@@ -53,10 +53,17 @@ This project follows the typical GitHub pull request model. Before starting any 
 
 Please read [contribution guidelines](CONTRIBUTING.md) if you are interested in contributing to this project.
 
+## Releasing
+
+To release a new version of the Cluster Operator, create a versioned tag (e.g. `v1.2.3`) of the repo, and the release pipeline will
+generate a new draft release, alongside release artefacts.
+
 ## License
 
 [Licensed under the MPL](LICENSE.txt), same as RabbitMQ server.
 
 ## Copyright
 
-Copyright 2020-2022 VMware, Inc. All Rights Reserved.
+Copyright 2020-2023 VMware, Inc. All Rights Reserved.
+
+[![Go Report Card](https://goreportcard.com/badge/github.com/rabbitmq/cluster-operator)](https://goreportcard.com/report/github.com/rabbitmq/cluster-operator)
